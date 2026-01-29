@@ -12,4 +12,4 @@ COPY . /Virtual-Assistant.Pipeline
 
 ENTRYPOINT ["python", "/Virtual-Assistant.Pipeline/main.py"]
 
-CMD ["python", "/Virtual-Assistant.Pipeline/main.py" ]
+CMD ["python", "/Virtual-Assistant.Pipeline/llm.py" ]
