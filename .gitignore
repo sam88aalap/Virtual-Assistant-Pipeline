@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 *.pyd
 *.env
+*.venv
 *.sqlite3
 
 # VS Code
@@ -11,3 +12,12 @@ __pycache__/
 
 # Virtual environment
 nlsenv/
+
+# PyTorch cache
+.cache/
+models/*.pt
+
+# Ignore PyTorch binaries
+*.dll
+*.lib
+*.pyd

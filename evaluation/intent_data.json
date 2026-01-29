@@ -1,0 +1,57 @@
+[
+  {
+    "question": "Will it rain in Marburg tomorrow?",
+    "choices": ["Weather", "Calendar", "Chat"],
+    "answer": 0
+  },
+  {
+    "question": "Please schedule a meeting with Lucas for Friday.",
+    "choices": ["Weather", "Calendar", "Chat"],
+    "answer": 1
+  },
+  {
+    "question": "Tell me a funny joke about programming.",
+    "choices": ["Weather", "Calendar", "Chat"],
+    "answer": 2
+  },
+  {
+    "question": "What is the temperature right now?",
+    "choices": ["Weather", "Calendar", "Chat"],
+    "answer": 0
+  },
+  {
+    "question": "Delete the event with ID 40.",
+    "choices": ["Weather", "Calendar", "Chat"],
+    "answer": 1
+  },
+  {
+    "question": "What will the weather be on Friday in Frankfurt?",
+    "choices": ["Weather", "Calendar", "Chat"],
+    "answer": 0
+  },
+  {
+    "question": "Will it rain there on Saturday?",
+    "choices": ["Weather", "Calendar", "Chat"],
+    "answer": 0
+  },
+  {
+    "question": "Where is my next appointment?",
+    "choices": ["Weather", "Calendar", "Chat"],
+    "answer": 1
+  },
+  {
+    "question": "Add an appointment titled XYZ for the 12th of January.",
+    "choices": ["Weather", "Calendar", "Chat"],
+    "answer": 1
+  },
+  {
+    "question": "Delete the previously created appointment.",
+    "choices": ["Weather", "Calendar", "Chat"],
+    "answer": 1
+  },
+  {
+    "question": "Change the place for my appointment tomorrow.",
+    "choices": ["Weather", "Calendar", "Chat"],
+    "answer": 1
+  }
+]
