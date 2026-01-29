@@ -24,9 +24,10 @@ class CalendarAPI:
         except ValueError:
             raise CalendarAPIError("Invalid JSON response from API")
 
+    # CRUD
+
     def create_event(self, title, description, start_time, end_time, location) -> dict:
         payload = {
-            "calendarid": self.calendarid,
             "title": title,
             "description": description,
             "start_time": start_time,
@@ -36,6 +37,7 @@ class CalendarAPI:
 
         response = requests.post(
             self.base_url,
+            params={"calenderid": self.calendarid},
             json=payload,
             headers=self.headers,
             timeout=self.timeout,
@@ -45,7 +47,7 @@ class CalendarAPI:
     def list_events(self) -> dict:
         response = requests.get(
             self.base_url,
-            params={"calendarid": self.calendarid},
+            params={"calenderid": self.calendarid},
             timeout=self.timeout,
         )
         return self._handle_response(response)
@@ -53,7 +55,7 @@ class CalendarAPI:
     def get_event(self, event_id: int) -> dict:
         response = requests.get(
             self.base_url,
-            params={"calendarid": self.calendarid, "id": event_id},
+            params={"calenderid": self.calendarid, "id": event_id},
             timeout=self.timeout,
         )
         return self._handle_response(response)
@@ -61,7 +63,7 @@ class CalendarAPI:
     def update_event(self, event_id: int, **updates) -> dict:
         response = requests.put(
             self.base_url,
-            params={"calendarid": self.calendarid, "id": event_id},
+            params={"calenderid": self.calendarid, "id": event_id},
             json=updates,
             headers=self.headers,
             timeout=self.timeout,
@@ -71,10 +73,12 @@ class CalendarAPI:
     def delete_event(self, event_id: int) -> dict:
         response = requests.delete(
             self.base_url,
-            params={"calendarid": self.calendarid, "id": event_id},
+            params={"calenderid": self.calendarid, "id": event_id},
             timeout=self.timeout,
         )
         return self._handle_response(response)
+
+    #Text formatting
 
     def event_to_text(self, event: dict) -> str:
         if not event:

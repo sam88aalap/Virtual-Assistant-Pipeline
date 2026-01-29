@@ -1,78 +1,65 @@
-from llm import LLM
+from llm3 import llm3
 from weatherAPI import WeatherAPI
 from CalendarAPI import CalendarAPI
+from conv import ConversationState, handle_turn
 from ASR import listen_once
 from TTS import text_to_speech_stream
 
-llm = LLM()
-weather_api = WeatherAPI()
-calendar_api = CalendarAPI()
+state = ConversationState()
+llm = llm3()
+weather = WeatherAPI()
+calendar = CalendarAPI()
 
+STOP_WORDS = {"cancel.", "never mind.", "stop.", "exit.", "quit."}
 
-def is_weather_query(text: str) -> bool:
-    text = text.lower()
-    return any(k in text for k in ["weather", "forecast", "temperature", "rain", "sunny"])
+def is_stop(text: str) -> bool:
+    return text.lower().strip() in STOP_WORDS
 
-
-def is_calendar_query(text: str) -> bool:
-    text = text.lower()
-    return any(k in text for k in ["calendar", "event", "schedule", "reminder", "meeting"])
-
-
-def handle_weather(text: str) -> str:
-    place = llm.facts.get("location", "Marburg")
-    return weather_api.get_forecast_text(place)
-
-
-def handle_calendar(text: str) -> str:
-    text = text.lower()
-
-    if "list" in text or "show" in text:
-        events = calendar_api.list_events()
-        return calendar_api.events_to_text(events)
-
-    if "delete" in text:
-        import re
-        match = re.search(r"delete event (\d+)", text)
-        if match:
-            event_id = int(match.group(1))
-            calendar_api.delete_event(event_id)
-            return f"Event {event_id} deleted."
-        return "Tell me the event ID to delete, like 'delete event 12'."
-
-    if "create" in text or "add" in text:
-        return "To create an event, please provide: title, start_time, end_time, location."
-
-    return "I can help with calendar events. Ask me to list, create or delete events."
+def execute_calendar_action(calendar_api, state):
+    intent = state.current_intent
+    slots = state.slots
+    if intent == "calendar_create":
+        return calendar_api.create_event(slots["title"], slots["description"], slots["start_time"], slots["end_time"], slots["location"])
+    elif intent == "calendar_update":
+        event_id = slots.get("event_id")
+        update_fields = {k: v for k, v in slots.items() if k != "event_id"}
+        return calendar_api.update_event(event_id, **update_fields)
+    elif intent == "calendar_delete":
+        event_id = slots.get("event_id")
+        return calendar_api.delete_event(slots.get("event_id"))
+    elif intent == "calendar_get":
+        return calendar_api.list_events()
 
 
 def run_voice_assistant():
-    print("Voice assistant running. Say something... (or type 'exit')")
+    print("📝 Assistant ready. Ask about weather or calendar events.\nSay Stop to stop")
 
     while True:
-        user_text = listen_once()
-        if not user_text:
+        text = listen_once()
+        if not text:
             continue
 
-        if user_text.lower() in {"exit", "quit"}:
+        if is_stop(text.lower()):
             break
 
-        if user_text.lower() == "/reset":
-            llm.reset_memory()
-            reply = "Memory cleared."
-        elif is_weather_query(user_text):
-            reply = handle_weather(user_text)
-        elif is_calendar_query(user_text):
-            reply = handle_calendar(user_text)
-        else:
-            reply = llm.generate(user_text)
+        print("User:", text)
+        res = handle_turn(text, state, llm)
+        print("Assistant:", res)
 
-        print("Assistant:", reply)
+        if res["status"] == "complete":
+            intent = res["intent"]
+            if intent == None:
+                print("Assistant: How may I help you?")
+            elif intent.startswith("calendar"):
+                result = execute_calendar_action(calendar, state)
+                print("📅 Calendar API result:", result)
+                if state.current_intent == "calendar_create":
+                    state.slots["event_id"] = result["id"]
+            elif state.current_intent == "weather":
+                forecast = weather.get_forecast_text(state.slots["location"], state.slots["day"])
+                print("🌤️ Forecast:", forecast)
 
-        try:
-            text_to_speech_stream(reply)
-        except Exception as e:
-            print("TTS error:", e)
+            print("\n✅ You can continue with another query.\n")
 
 
 if __name__ == "__main__":

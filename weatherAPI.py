@@ -12,6 +12,9 @@ class WeatherAPI:
         self.timeout = timeout
 
     def get_forecast(self, place: str) -> dict:
+        """
+        Fetch raw weather forecast data as a dictionary.
+        """
         try:
             response = requests.post(
                 self.base_url,
@@ -28,6 +31,9 @@ class WeatherAPI:
             raise WeatherAPIError("Invalid JSON response from API")
 
     def get_forecast_day(self, place: str, day: str) -> dict:
+        """
+        Fetch raw weather forecast data as a dictionary.
+        """
         data = self.get_forecast(place)
         target_day = day.lower()
 
@@ -40,30 +46,24 @@ class WeatherAPI:
                     "weather": entry.get("weather"),
                 }
 
-        return {"error": "Day not found"}
+    def get_forecast_text(self, place: str, day: str) -> str:
+        """
+        Fetch weather forecast and return it as formatted text.
+        """
+        data = self.get_forecast_day(place, day)
 
-    def get_forecast_text(self, place: str) -> str:
-        data = self.get_forecast(place)
+        place = data.get("place")
+        day = data.get("day")
+        weather = data.get("weather")
+        temp_min = data.get("temperature",{}).get("min")
+        temp_max = data.get("temperature",{}).get("max")
 
         lines = [f"Weather forecast for {data.get('place', place)}:"]
         lines.append("-" * 40)
 
-        for day in data.get("forecast", []):
-            day_name = day.get("day", "Unknown day").capitalize()
-            temp = day.get("temperature", {})
-            min_temp = temp.get("min", "?")
-            max_temp = temp.get("max", "?")
-            weather = day.get("weather", "Unknown")
-
-            lines.append(
-                f"{day_name}: {weather}, "
-                f"{min_temp}°C – {max_temp}°C"
-            )
-
-        return "\n".join(lines)
+        return f"Weather forecast for {place} on {day}: {weather}, lowest temp of {temp_min} and highest of {temp_max}."
 
 
 if __name__ == "__main__":
     api = WeatherAPI()
-    print(api.get_forecast_text("Marburg"))
-    print(api.get_forecast_day("Marburg", "Monday"))
+    print(api.get_forecast_text("Marburg", "Monday"))
