@@ -3,78 +3,128 @@ import json
 import os
 import re
 from typing import List, Dict, Optional
-from datetime import datetime
-import pytz
+from datetime import datetime, timedelta
+
+from weatherAPI import WeatherAPI
+from CalendarAPI import CalendarAPI
 
 SYSTEM_PROMPT = """
 You are a concise, friendly assistant.
-
 Rules:
 - Answer simple factual questions directly.
 - Use conversation history ONLY when necessary.
-- Do NOT restate past conversations unless asked.
 - Keep responses short and clear.
-- If user asks for a list, respond ONLY in list format (bullets or numbered).
-- If you don't know the answer, say "I don't know" and do NOT hallucinate.
+- Remember context for follow-up questions when appropriate.
+- If you don't know the answer, say "I don't know".
 """
+
+# --------------------
+# WEATHER CONDITIONS
+# --------------------
+WEATHER_CONDITIONS = [
+    "rain", "snow", "clear", "cloud", "cloudy",
+    "mist", "fog", "sun", "sunny", "storm", "thunder"
+]
+
+MAX_CONTEXT_TURNS = 5  # Context expires after N turns
+
 
 def normalize(text: str) -> str:
     return text.lower().strip()
 
-def extract_name(text: str) -> Optional[str]:
-    match = re.search(r"(?:my name is|i am)\s+([A-Z][a-z]+)", text, re.IGNORECASE)
-    return match.group(1) if match else None
 
 def extract_location(text: str) -> Optional[str]:
-    match = re.search(
-        r"(?:i live in|i am from|i'm from)\s+([A-Z][a-zA-Z\s]+)",
-        text,
-        re.IGNORECASE,
+    match = re.search(r"\bin\s+([A-Za-z\s]+)", text, re.IGNORECASE)
+    if not match:
+        return None
+    loc = match.group(1)
+    loc = re.sub(
+        r"\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+        "", loc, flags=re.IGNORECASE
     )
-    return match.group(1).strip() if match else None
+    loc = re.sub(
+        r"\b(will|be|like|weather|forecast|on|at)\b",
+        "", loc, flags=re.IGNORECASE
+    )
+    return loc.strip() or None
 
-def needs_context(text: str) -> bool:
-    keywords = [
-        "earlier", "before", "again", "that",
-        "we discussed", "you said", "last time",
-        "continue", "remember"
-    ]
-    return any(k in normalize(text) for k in keywords)
 
-def is_list_request(text: str) -> bool:
-    text = normalize(text)
-    return any(k in text for k in ["list", "bullet", "top 5", "top 10", "suggestions"])
+def extract_day(text: str) -> Optional[str]:
+    t = normalize(text)
+    if "today" in t:
+        return "today"
+    if "tomorrow" in t:
+        return "tomorrow"
+    for d in ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]:
+        if d in t:
+            return d
+    return None
 
-def is_comparison_question(text: str) -> bool:
+
+def resolve_day(day: str) -> str:
+    if day == "today":
+        return datetime.now().strftime("%A").lower()
+    if day == "tomorrow":
+        return (datetime.now() + timedelta(days=1)).strftime("%A").lower()
+    return day
+
+
+def extract_weather_condition(text: str) -> Optional[str]:
+    t = normalize(text)
+    for cond in WEATHER_CONDITIONS:
+        if cond in t:
+            return cond
+    return None
+
+
+def condition_matches(requested: str, actual: str) -> bool:
+    actual = normalize(actual)
+    mapping = {
+        "clear": ["clear"],
+        "sun": ["sun", "clear"],
+        "sunny": ["sun", "clear"],
+        "cloud": ["cloud"],
+        "cloudy": ["cloud"],
+        "rain": ["rain", "shower"],
+        "snow": ["snow"],
+        "storm": ["storm", "thunder"],
+        "thunder": ["thunder", "storm"],
+        "mist": ["mist", "fog"],
+        "fog": ["fog", "mist"]
+    }
+    return any(k in actual for k in mapping.get(requested, []))
+
+
+def is_weather_query(text: str) -> bool:
     return any(k in normalize(text) for k in [
-        "which is best", "best among", "which one", "top rated", "highest rated", "recommend one"
+        "weather", "forecast", "rain", "snow", "sun",
+        "cloud", "temperature", "temp", "clear"
     ])
 
-def is_confirmation(text: str) -> bool:
-    return normalize(text) in {"yes", "yeah", "yep", "correct", "sure", "please do"}
 
-def is_rejection(text: str) -> bool:
-    return normalize(text) in {"no", "nope", "don't", "do not", "forget it"}
+def is_temperature_query(text: str) -> bool:
+    return any(k in normalize(text) for k in ["temperature", "temp"])
 
-TIMEZONE_MAP = {
-    "germany": "Europe/Berlin",
-    "marburg": "Europe/Berlin",
-    "berlin": "Europe/Berlin",
-    "france": "Europe/Paris",
-    "uk": "Europe/London",
-    "united kingdom": "Europe/London",
-    "usa": "America/New_York",
-    "india": "Asia/Kolkata",
-}
 
-def get_timezone_for_location(location: str) -> Optional[str]:
-    key = location.lower()
-    return TIMEZONE_MAP.get(key)
+def is_calendar_query(text: str) -> bool:
+    return any(k in normalize(text) for k in [
+        "calendar", "appointment", "meeting", "schedule", "event"
+    ])
 
-def get_local_time(timezone_str: str) -> str:
-    tz = pytz.timezone(timezone_str)
-    now = datetime.now(tz)
-    return now.strftime("%I:%M %p")
+
+def is_add_event(text: str) -> bool:
+    return any(k in normalize(text) for k in [
+        "add", "create", "schedule", "set up", "new appointment"
+    ])
+
+
+def is_delete_event(text: str) -> bool:
+    return any(k in normalize(text) for k in ["delete", "remove", "cancel"])
+
+
+def is_update_event(text: str) -> bool:
+    return any(k in normalize(text) for k in ["change", "update", "edit"])
+
 
 class LLM:
     def __init__(
@@ -91,12 +141,21 @@ class LLM:
 
         self.history: List[Dict] = []
         self.facts: Dict = {}
-        self.pending_fact: Optional[Dict] = None
 
-        self.last_list: Optional[List[str]] = None
+        self.weather_api = WeatherAPI()
+        self.calendar_api = CalendarAPI()
+
+        # Last weather context for follow-ups
+        self.last_weather_context = {"place": None, "day": None, "turn": 0}
+        # Last calendar event for follow-ups
+        self.last_calendar_event_id = None
+        self.last_calendar_turn = 0
 
         self._load_memory()
 
+    # --------------------
+    # MEMORY FUNCTIONS
+    # --------------------
     def _load_memory(self):
         if os.path.exists(self.history_file):
             try:
@@ -129,126 +188,152 @@ class LLM:
         exchanges = exchanges[-self.max_exchanges:]
         self.history = [m for pair in exchanges for m in pair]
 
+    # --------------------
+    # WEATHER CONTEXT FUNCTIONS
+    # --------------------
+    def _update_weather_context(self, place, day):
+        self.last_weather_context = {
+            "place": place,
+            "day": day,
+            "turn": len(self.history) // 2
+        }
+
+    def _get_weather_context(self):
+        if (len(self.history)//2 - self.last_weather_context.get("turn",0)) > MAX_CONTEXT_TURNS:
+            self.last_weather_context = {"place": None, "day": None, "turn":0}
+            return None, None
+        return self.last_weather_context.get("place"), self.last_weather_context.get("day")
+
+    # --------------------
+    # GENERATE FUNCTION
+    # --------------------
     def generate(self, user_text: str) -> str:
         user_norm = normalize(user_text)
 
-        if self.pending_fact:
-            if is_confirmation(user_text):
-                key = self.pending_fact["key"]
-                value = self.pending_fact["value"]
-                self.facts[key] = value
-                self.pending_fact = None
-                self._save_memory()
-                reply = f"Got it — I’ll remember that you {key.replace('_', ' ')} in {value}."
-                self._append_exchange(user_text, reply)
-                return reply
+        # Forget context command
+        if user_norm == "/forget":
+            self.last_weather_context = {"place": None, "day": None, "turn":0}
+            self.last_calendar_event_id = None
+            self.last_calendar_turn = 0
+            return "Context forgotten."
 
-            if is_rejection(user_text):
-                self.pending_fact = None
-                reply = "Okay, I won’t remember that."
-                self._append_exchange(user_text, reply)
-                return reply
+        # --------------------
+        # WEATHER INTENT
+        # --------------------
+        if is_weather_query(user_text):
+            place = extract_location(user_text)
+            day_key = extract_day(user_text)
 
-        name = extract_name(user_text)
-        if name:
-            self.facts["name"] = name
-            self._save_memory()
-            reply = f"Nice to meet you, {name}."
-            self._append_exchange(user_text, reply)
-            return reply
+            # Use last context if missing
+            if not place or not day_key:
+                last_place, last_day = self._get_weather_context()
+                place = place or last_place or "Marburg"
+                day_key = day_key or last_day or "today"
 
-        location = extract_location(user_text)
-        if location:
-            self.pending_fact = {"key": "location", "value": location}
-            reply = f"Got it — you live in {location}. Should I remember that?"
-            self._append_exchange(user_text, reply)
-            return reply
+            resolved_day = resolve_day(day_key)
+            self._update_weather_context(place, day_key)
 
-        if "time" in user_norm:
-            if "in " in user_norm:
-                loc = user_norm.split("in ")[-1].strip()
-                tz = get_timezone_for_location(loc)
-                if tz:
-                    return f"The current time in {loc.capitalize()} is {get_local_time(tz)}."
-            if "location" in self.facts:
-                tz = get_timezone_for_location(self.facts["location"])
-                if tz:
-                    return f"The current time in {self.facts['location']} is {get_local_time(tz)}."
-            return "I don't know your location yet. Please tell me where you live."
+            forecast = self.weather_api.get_forecast_day(place, resolved_day)
+            if forecast.get("error"):
+                return "I couldn't find that forecast."
 
-        if "my name" in user_norm:
-            return f"Your name is {self.facts.get('name', 'unknown')}."
+            weather = forecast["weather"]
+            tmin = forecast["temperature"]["min"]
+            tmax = forecast["temperature"]["max"]
 
-        if "where do i live" in user_norm:
-            return f"You live in {self.facts.get('location', 'unknown')}."
+            requested_condition = extract_weather_condition(user_text)
 
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        if needs_context(user_text):
-            messages.extend(self.history)
-        messages.append({"role": "user", "content": user_text})
-
-        if is_comparison_question(user_text) and self.last_list:
-            list_text = "\n".join([f"{i+1}. {item}" for i, item in enumerate(self.last_list)])
-            messages.append({
-                "role": "user",
-                "content": (
-                    "Here are the options (from your previous list):\n"
-                    f"{list_text}\n\n"
-                    "Please pick the top-rated one ONLY from this list.\n"
-                    "Do NOT use placeholders like [Insert].\n"
-                    "If you are unsure, say 'I don't know'."
+            if requested_condition:
+                yesno = "Yes" if condition_matches(requested_condition, weather) else "No"
+                return (
+                    f"{yesno}. The weather in {place} on {resolved_day} will be {weather}, "
+                    f"with a temperature between {tmin}°C and {tmax}°C."
                 )
-            })
 
-        if is_list_request(user_text):
-            messages.append({"role": "user", "content": "Please respond ONLY in list format."})
+            if is_temperature_query(user_text):
+                return f"Today, the temperature in {place} will be between {tmin}°C and {tmax}°C."
 
+            if day_key == "today":
+                return f"Today, the weather in {place} will be {weather} with a temperature between {tmin}°C and {tmax}°C."
+            return f"The weather in {place} on {resolved_day} will be {weather} with a temperature between {tmin}°C and {tmax}°C."
+
+        # --------------------
+        # CALENDAR INTENT
+        # --------------------
+        if is_calendar_query(user_text):
+            events = self.calendar_api.list_events() or []
+
+            # NEXT event
+            if "next" in user_norm:
+                if not events:
+                    return "You have no upcoming events."
+                return self.calendar_api.event_to_text(events[0])
+
+            # ADD event
+            if is_add_event(user_text):
+                title = re.search(r"title(?:d)?\s+([A-Za-z0-9\s]+)", user_text, re.IGNORECASE)
+                date = re.search(r"(\d{1,2}(?:th|st|nd|rd)?\s+of\s+[A-Za-z]+)", user_text, re.IGNORECASE)
+
+                event = self.calendar_api.create_event(
+                    title=title.group(1).strip() if title else "Untitled",
+                    description="Created via assistant",
+                    start_time=(date.group(1) if date else "2025-01-12") + " 10:00",
+                    end_time=(date.group(1) if date else "2025-01-12") + " 11:00",
+                    location=self.facts.get("location", "Marburg"),
+                )
+                self.last_calendar_event_id = event.get("id")
+                self.last_calendar_turn = len(self.history)//2
+                return f"Created event: {event.get('title', 'Untitled')}"
+
+            # DELETE event
+            if is_delete_event(user_text):
+                if self.last_calendar_event_id:
+                    self.calendar_api.delete_event(self.last_calendar_event_id)
+                    self.last_calendar_event_id = None
+                    self.last_calendar_turn = len(self.history)//2
+                    return "Deleted the previously created appointment."
+                elif events:
+                    self.calendar_api.delete_event(events[-1]["id"])
+                    return "Deleted the last event."
+                else:
+                    return "You have no events to delete."
+
+            # UPDATE event
+            if is_update_event(user_text):
+                if self.last_calendar_event_id:
+                    new_loc = extract_location(user_text) or "Marburg"
+                    self.calendar_api.update_event(self.last_calendar_event_id, location=new_loc)
+                    return f"Updated the previously created appointment location to {new_loc}."
+                elif events:
+                    new_loc = extract_location(user_text) or "Marburg"
+                    self.calendar_api.update_event(events[0]["id"], location=new_loc)
+                    return f"Updated the event location to {new_loc}."
+                else:
+                    return "You have no events to update."
+
+            return "I can help with calendar events."
+
+        # --------------------
+        # FALLBACK
+        # --------------------
         try:
-            response = ollama.chat(model=self.model, messages=messages)
-            assistant_text = response["message"]["content"].strip()
-            if not assistant_text:
-                raise RuntimeError("Empty response")
-        except Exception as e:
-            print(f"[LLM ERROR] {e}")
-            return "Sorry, I'm having trouble responding right now. Please try again."
-
-        if is_list_request(user_text):
-            items = [line.strip() for line in assistant_text.splitlines() if line.strip()]
-            if len(items) >= 2:
-                self.last_list = items
-
-        self._append_exchange(user_text, assistant_text)
-        return assistant_text
-
-    def _append_exchange(self, user_text, assistant_text):
-        self.history.append({"role": "user", "content": user_text})
-        self.history.append({"role": "assistant", "content": assistant_text})
-        self._trim_history()
-        self._save_memory()
-
-    def reset_memory(self):
-        self.history = []
-        self.facts = {}
-        self.pending_fact = None
-        self.last_list = None
-        self._save_memory()
-
+            response = ollama.chat(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_text},
+                ],
+            )
+            return response["message"]["content"].strip()
+        except Exception:
+            return "Sorry, I'm having trouble responding right now."
 
 if __name__ == "__main__":
     llm = LLM()
-    print("Local Ollama assistant running.")
-    print("Commands: /reset | exit\n")
+    print("Local assistant running. Type 'exit' to quit. Type '/forget' to clear context.\n")
 
     while True:
         user_input = input("You: ").strip()
-
         if user_input.lower() in {"exit", "quit"}:
             break
-
-        if user_input.lower() == "/reset":
-            llm.reset_memory()
-            print("Assistant: Memory cleared.")
-            continue
-
-        reply = llm.generate(user_input)
-        print("Assistant:", reply)
+        print("Assistant:", llm.generate(user_input))

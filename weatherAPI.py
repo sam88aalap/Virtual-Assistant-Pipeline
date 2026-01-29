@@ -61,3 +61,9 @@ class WeatherAPI:
             )
 
         return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    api = WeatherAPI()
+    print(api.get_forecast_text("Marburg"))
+    print(api.get_forecast_day("Marburg", "Monday"))

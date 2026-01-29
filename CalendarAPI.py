@@ -7,11 +7,11 @@ class CalendarAPIError(Exception):
 
 
 class CalendarAPI:
-    def __init__(self, base_url="https://api.responsible-nlp.net/calendar.php", timeout=10, calendarid=54):
+    def __init__(self, base_url="https://api.responsible-nlp.net/calendar.php", timeout=10, calenderid=54):
         self.base_url = base_url
         self.timeout = timeout
         self.headers = {"Content-Type": "application/json"}
-        self.calendarid = calendarid
+        self.calenderid = calenderid  # Corrected parameter name
 
     def _handle_response(self, response):
         try:
@@ -24,16 +24,18 @@ class CalendarAPI:
         except ValueError:
             raise CalendarAPIError("Invalid JSON response from API")
 
+    # ---------------------------
+    # CRUD METHODS
+    # ---------------------------
     def create_event(self, title, description, start_time, end_time, location) -> dict:
         payload = {
-            "calendarid": self.calendarid,
+            "calenderid": self.calenderid,
             "title": title,
             "description": description,
             "start_time": start_time,
             "end_time": end_time,
             "location": location,
         }
-
         response = requests.post(
             self.base_url,
             json=payload,
@@ -45,7 +47,7 @@ class CalendarAPI:
     def list_events(self) -> dict:
         response = requests.get(
             self.base_url,
-            params={"calendarid": self.calendarid},
+            params={"calenderid": self.calenderid},
             timeout=self.timeout,
         )
         return self._handle_response(response)
@@ -53,7 +55,7 @@ class CalendarAPI:
     def get_event(self, event_id: int) -> dict:
         response = requests.get(
             self.base_url,
-            params={"calendarid": self.calendarid, "id": event_id},
+            params={"calenderid": self.calenderid, "id": event_id},
             timeout=self.timeout,
         )
         return self._handle_response(response)
@@ -61,7 +63,7 @@ class CalendarAPI:
     def update_event(self, event_id: int, **updates) -> dict:
         response = requests.put(
             self.base_url,
-            params={"calendarid": self.calendarid, "id": event_id},
+            params={"calenderid": self.calenderid, "id": event_id},
             json=updates,
             headers=self.headers,
             timeout=self.timeout,
@@ -71,11 +73,14 @@ class CalendarAPI:
     def delete_event(self, event_id: int) -> dict:
         response = requests.delete(
             self.base_url,
-            params={"calendarid": self.calendarid, "id": event_id},
+            params={"calenderid": self.calenderid, "id": event_id},
             timeout=self.timeout,
         )
         return self._handle_response(response)
 
+    # ---------------------------
+    # HELPER METHODS
+    # ---------------------------
     def event_to_text(self, event: dict) -> str:
         if not event:
             return "Event not found."
@@ -99,3 +104,10 @@ class CalendarAPI:
             lines.append("-" * 40)
 
         return "\n".join(lines)
+
+
+###### test #####
+
+if __name__ == "__main__":
+    api = CalendarAPI()
+    print(api.list_events())
