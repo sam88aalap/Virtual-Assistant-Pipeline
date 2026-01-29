@@ -19,6 +19,10 @@ Rules:
 - If you don't know the answer, say "I don't know" and do NOT hallucinate.
 """
 
+client = ollama.Client(
+    host=os.getenv("OLLAMA_HOST", "http://localhost:11434")
+)
+
 
 def normalize(text: str) -> str:
     return text.lower().strip()
@@ -250,7 +254,7 @@ class LLM:
         messages.append({"role": "user", "content": user_text})
 
         try:
-            response = ollama.chat(model=self.model, messages=messages)
+            response = client.chat(model=self.model, messages=messages)
             assistant_text = response["message"]["content"].strip()
             if not assistant_text:
                 raise RuntimeError("Empty response")
