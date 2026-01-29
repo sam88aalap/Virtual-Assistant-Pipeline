@@ -98,23 +98,27 @@ if __name__ == "__main__":
         if is_stop(text):
             break
 
-        res = handle_turn(text, state, llm)
-        print("Assistant:", res)
+        try:
+            res = handle_turn(text, state, llm)
+            print("Assistant:", res)
 
-        if res["status"] == "complete":
-            intent = res["intent"]
-            if intent == None:
-                print("Assistant: How may I help you?")
-            elif intent.startswith("calendar"):
-                result = execute_calendar_action(calendar, state)
-                print("📅 Calendar API result:", result)
-                if state.current_intent == "calendar_create":
-                    state.slots["event_id"] = result["id"]
-            elif state.current_intent == "weather":
-                forecast = weather.get_forecast_text(state.slots["location"], state.slots["day"])
-                print("🌤️ Forecast:", forecast)
+            if res["status"] == "complete":
+                intent = res["intent"]
+                if intent == None:
+                    print("Assistant: How may I help you?")
+                elif intent.startswith("calendar"):
+                    result = execute_calendar_action(calendar, state)
+                    print("📅 Calendar API result:", result)
+                    if state.current_intent == "calendar_create":
+                        state.slots["event_id"] = result["id"]
+                elif state.current_intent == "weather":
+                    forecast = weather.get_forecast_text(state.slots["location"], state.slots["day"])
+                    print("🌤️ Forecast:", forecast)
+        except Exception as e:
+            print(f"[LLM ERROR] {e}")
+            print("Sorry, I'm having trouble responding right now. Please try again.")
 
-            print("\n✅ You can continue with another query.\n")
+        print("\n✅ You can continue with another query.\n")
 
     #print(llm.process_input("What is the weather in Marburg tomorrow?"))
     #print(llm.process_weather_input("What is the weather in Marburg tomorrow?"))
