@@ -328,73 +328,40 @@ class LLM:
         if is_calendar_query(user_text):
             events = self.calendar_api.list_events() or []
 
-            # REMOVE expired events
+            # 1. Filter expired events
             now = datetime.now()
             upcoming = []
             for e in events:
                 try:
                     end_time = e.get("end_time")
                     if end_time.endswith("Z"):
-                        dt = datetime.fromisoformat(end_time.replace("Z","+00:00")).astimezone()
+                        dt = datetime.fromisoformat(end_time.replace("Z", "+00:00")).astimezone()
                     else:
                         dt = datetime.fromisoformat(end_time)
+
                     if dt >= now:
                         upcoming.append(e)
-                        # Removed the delete_event call to prevent data loss
                 except Exception:
                     upcoming.append(e)
             events = upcoming
+
+            # 2. Sort events by date (Crucial for 'Next' logic)
             events.sort(key=lambda x: x['start_time'])
-            # --------------------
-            # ADD event
-            # --------------------
-            if is_add_event(user_text):
-                title = self._extract_title_from_text(user_text)
-                date_obj = self._parse_date_from_text(user_text)
-
-                # If no specific date found, check for "tomorrow" or "today" keywords
-                if not date_obj:
-                    day_keyword = extract_day(user_text)
-                    if day_keyword == "tomorrow":
-                        date_obj = datetime.now() + timedelta(days=1)
-                    elif day_keyword == "today":
-                        date_obj = datetime.now()
-                start_time = date_obj.isoformat() if date_obj else datetime.now().isoformat()
-                end_time = (date_obj + timedelta(hours=1)).isoformat() if date_obj else (datetime.now() + timedelta(hours=1)).isoformat()
-
-                specific_location = extract_location(user_text)
-
-                event = self.calendar_api.create_event(
-                    title=title,
-                    description="Created via assistant",
-                    start_time=start_time,
-                    end_time=end_time,
-                    location=specific_location  # Only uses location if explicitly found
-                )
-                self.last_calendar_event_id = event.get("id")
-                self.last_calendar_turn = len(self.history)//2
-                if date_obj:
-                    date_str = date_obj.strftime("%d of %B")
-                    return f"Created appointment: {title} for {date_str}."
-                else:
-                    return f"Created appointment: {title}."
 
             # --------------------
-            # DELETE event
+            # PRIORITY 1: DELETE
             # --------------------
-
             if is_delete_event(user_text):
-                # 1. Handle "Delete All"
+                # Handle "Delete All"
                 if "all" in user_text.lower():
                     if not events:
                         return "You have no appointments to delete."
-
                     count = len(events)
                     for e in events:
                         self.calendar_api.delete_event(e["id"])
                     return f"Deleted all {count} upcoming appointments."
 
-                # 2. Check if user mentions a title
+                # Handle "Delete by Title"
                 title_match = re.search(r"titled\s+'?\"?([A-Za-z0-9\s]+)'?\"?", user_text, re.IGNORECASE)
                 if title_match:
                     title_to_delete = title_match.group(1).strip().lower()
@@ -409,7 +376,7 @@ class LLM:
                     else:
                         return f"No appointment found with title '{title_to_delete}'."
 
-                # 3. Delete the last created event (context)
+                # Handle "Delete Last Created"
                 elif self.last_calendar_event_id:
                     self.calendar_api.delete_event(self.last_calendar_event_id)
                     self.last_calendar_event_id = None
@@ -418,10 +385,10 @@ class LLM:
                     return "You have no events to delete."
 
             # --------------------
-            # UPDATE event
+            # PRIORITY 2: UPDATE
             # --------------------
             if is_update_event(user_text):
-                # 1. Determine which event to update
+                # Determine target event
                 event_id = None
                 if self.last_calendar_event_id:
                     event_id = self.last_calendar_event_id
@@ -431,10 +398,8 @@ class LLM:
                 if not event_id:
                     return "You have no events to update."
 
-                # 2. Check for DATE update FIRST
+                # Check for DATE update FIRST
                 new_date_obj = self._parse_date_from_text(user_text)
-
-                # Check for keywords like "tomorrow" or "today"
                 if not new_date_obj:
                     day_key = extract_day(user_text)
                     if day_key == "today":
@@ -443,16 +408,12 @@ class LLM:
                         new_date_obj = datetime.now() + timedelta(days=1)
 
                 if new_date_obj:
-                    # USE ISO FORMAT (matches your create_event logic)
                     new_time_str = new_date_obj.replace(hour=9, minute=0).isoformat()
-
-                    # USE 'start_time' (matches your create_event logic)
                     self.calendar_api.update_event(event_id, start_time=new_time_str)
-
                     date_display = new_date_obj.strftime("%d %B")
                     return f"Updated the appointment date to {date_display}."
 
-                # 3. Check for LOCATION update
+                # Check for LOCATION update
                 new_loc = extract_location(user_text)
                 if new_loc:
                     self.calendar_api.update_event(event_id, location=new_loc)
@@ -461,38 +422,69 @@ class LLM:
                 return "I'm not sure what you want to change (date or location)."
 
             # --------------------
-            # LIST events
+            # PRIORITY 3: ADD
+            # --------------------
+            if is_add_event(user_text):
+                title = self._extract_title_from_text(user_text)
+                date_obj = self._parse_date_from_text(user_text)
+
+                # Handle "tomorrow"/"today" if regex failed
+                if not date_obj:
+                    day_keyword = extract_day(user_text)
+                    if day_keyword == "tomorrow":
+                        date_obj = datetime.now() + timedelta(days=1)
+                    elif day_keyword == "today":
+                        date_obj = datetime.now()
+
+                start_time = date_obj.isoformat() if date_obj else datetime.now().isoformat()
+                end_time = (date_obj + timedelta(hours=1)).isoformat() if date_obj else (
+                            datetime.now() + timedelta(hours=1)).isoformat()
+
+                specific_location = extract_location(user_text)
+
+                event = self.calendar_api.create_event(
+                    title=title,
+                    description="Created via assistant",
+                    start_time=start_time,
+                    end_time=end_time,
+                    location=specific_location
+                )
+                self.last_calendar_event_id = event.get("id")
+                self.last_calendar_turn = len(self.history) // 2
+
+                if date_obj:
+                    date_str = date_obj.strftime("%d of %B")
+                    return f"Created appointment: {title} for {date_str}."
+                else:
+                    return f"Created appointment: {title}."
+
+            # --------------------
+            # PRIORITY 4: LIST (Default Fallback)
             # --------------------
             current_year = datetime.now().year
 
-            # Helper function to format date with year if needed
             def format_event_date(iso_time):
                 dt = datetime.fromisoformat(iso_time)
                 if dt.year != current_year:
-                    return dt.strftime('%d %B %Y')  # Show Year (e.g., 13 January 2027)
-                return dt.strftime('%d %B')  # Hide Year (e.g., 31 January)
+                    return dt.strftime('%d %B %Y')
+                return dt.strftime('%d %B')
 
-            # 1. Handle "Next" appointment specifically
             if "next" in user_text.lower():
                 if not events:
                     return "You have no upcoming appointments."
-                # events[0] is the closest one (because we sorted them earlier)
                 e = events[0]
                 date_display = format_event_date(e['start_time'])
                 loc = e.get('location')
-
                 if loc:
                     return f"Your next appointment is '{e['title']}' on {date_display} at {loc}."
                 else:
                     return f"Your next appointment is '{e['title']}' on {date_display}."
 
-            # 2. Handle "Today"
             if "today" in user_text.lower():
                 today_str = datetime.now().strftime("%Y-%m-%d")
                 today_events = [e for e in events if e.get("start_time", "").startswith(today_str)]
                 if not today_events:
                     return "No calendar events for today."
-
                 lines = []
                 for e in today_events:
                     date_display = format_event_date(e['start_time'])
@@ -503,10 +495,9 @@ class LLM:
                         lines.append(f"You have an event '{e['title']}' on {date_display}.")
                 return "\n".join(lines)
 
-            # 3. Show all upcoming (Default)
+            # Show all upcoming
             if not events:
                 return "No calendar events found."
-
             lines = []
             for e in events:
                 date_display = format_event_date(e['start_time'])
