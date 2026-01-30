@@ -21,8 +21,8 @@ Rules:
 # WEATHER CONDITIONS
 # --------------------
 WEATHER_CONDITIONS = [
-    "rain", "snow", "clear", "cloud", "cloudy",
-    "mist", "fog", "sun", "sunny", "storm", "thunder"
+    "clear sky", "few clouds", "scattered clouds", "broken clouds",
+    "shower rain", "rain", "thunderstorm", "snow", "mist"
 ]
 
 MAX_CONTEXT_TURNS = 5  # Context expires after N turns
@@ -30,26 +30,32 @@ MAX_CONTEXT_TURNS = 5  # Context expires after N turns
 def normalize(text: str) -> str:
     return text.lower().strip()
 
+
 def extract_location(text: str) -> Optional[str]:
-    match = re.search(r"\bin\s+([A-Za-z\s]+)", text, re.IGNORECASE)
+    # Added "to" to the regex list (in|at|to)
+    match = re.search(r"\b(?:in|at|to)\s+([A-Za-z\s]+)", text, re.IGNORECASE)
     if not match:
         return None
     loc = match.group(1)
+
+    # Remove day names
     loc = re.sub(
         r"\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
         "", loc, flags=re.IGNORECASE
     )
+    # Remove filler words
     loc = re.sub(
-        r"\b(will|be|like|weather|forecast|on|at)\b",
+        r"\b(will|be|like|weather|forecast|on|the|appointment|my|place)\b",
         "", loc, flags=re.IGNORECASE
     )
-    return loc.strip() or None
+    return loc.strip() or Nonewhat
 
 def extract_day(text: str) -> Optional[str]:
     t = normalize(text)
     if "today" in t:
         return "today"
-    if "tomorrow" in t:
+    # Added "tommorow" (typo) to the check
+    if "tomorrow" in t or "tommorow" in t:
         return "tomorrow"
     for d in ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]:
         if d in t:
@@ -194,40 +200,76 @@ class LLM:
     # CALENDAR PARSING HELPERS
     # --------------------
     def _parse_date_from_text(self, text: str) -> Optional[datetime]:
-        """Extract date from user text like '6th February' or '6 Feb'"""
+        """Extract date. If the date has passed this year, schedule for next year."""
         match = re.search(
-            r"(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|march|april|may|june|july|aug|sep|oct|nov|dec|january|february|march|april|may|june|july|august|september|october|november|december))",
+            r"(\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|aug|sep|oct|nov|dec))",
             text,
             re.IGNORECASE
         )
         if match:
             date_str = match.group(1)
-            date_str_clean = re.sub(r"(st|nd|rd|th)", "", date_str, flags=re.IGNORECASE).strip()
-            try:
-                return datetime.strptime(date_str_clean + f" {datetime.now().year}", "%d %B %Y")
-            except ValueError:
+            # Remove ordinals and "of"
+            date_str_clean = re.sub(r"(st|nd|rd|th|\bof\b)", "", date_str, flags=re.IGNORECASE).strip()
+            date_str_clean = re.sub(r"\s+", " ", date_str_clean)
+
+            current_year = datetime.now().year
+
+            # Helper to try parsing and fixing year
+            def parse_and_fix_year(fmt):
                 try:
-                    return datetime.strptime(date_str_clean + f" {datetime.now().year}", "%d %b %Y")
+                    dt = datetime.strptime(date_str_clean + f" {current_year}", fmt)
+                    # If the date is strictly in the past (before today), add 1 year
+                    if dt.date() < datetime.now().date():
+                        dt = dt.replace(year=current_year + 1)
+                    return dt
                 except ValueError:
                     return None
+
+            # Try full name format (%B)
+            res = parse_and_fix_year("%d %B %Y")
+            if res: return res
+
+            # Try abbreviation format (%b)
+            res = parse_and_fix_year("%d %b %Y")
+            if res: return res
+
         return None
 
     def _extract_title_from_text(self, text: str) -> str:
-        """Extract title by removing date and keywords"""
+        """Extract title by removing date, location, relative days, and keywords"""
         text_clean = text.lower()
-        # Remove keywords
-        text_clean = re.sub(r"\b(create|add|schedule|set up|event|appointment|titled|title|for)\b", "", text_clean)
-        # Remove the date substring
+
+        # 1. Remove Location phrases (at X, in Y, to Z)
+        loc_match = re.search(r"\b(?:in|at|to)\s+[a-z\s]+", text_clean)
+        if loc_match:
+            candidate = loc_match.group(0)
+            if not any(x in candidate for x in ["appointment", "meeting"]):
+                text_clean = text_clean.replace(candidate, "")
+
+        # 2. Remove specific date phrases
         date_match = re.search(
-            r"(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|march|april|may|june|july|aug|sep|oct|nov|dec|january|february|march|april|may|june|july|august|september|october|november|december))",
+            r"(\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|aug|sep|oct|nov|dec))",
             text_clean,
             re.IGNORECASE
         )
         if date_match:
             text_clean = text_clean.replace(date_match.group(0), "")
-        # Clean extra spaces
-        return text_clean.strip().title() or "Untitled"
 
+        # 3. Remove relative days and weekdays
+        text_clean = re.sub(
+            r"\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+            "",
+            text_clean
+        )
+
+        # 4. Remove keywords (Added "the" to this list)
+        text_clean = re.sub(
+            r"\b(create|add|schedule|set up|event|appointment|titled|title|for|named|name|an|a|and|the)\b",
+            "",
+            text_clean
+        )
+
+        return " ".join(text_clean.split()).title() or "Untitled"
     # --------------------
     # GENERATE FUNCTION
     # --------------------
@@ -257,6 +299,7 @@ class LLM:
             self._update_weather_context(place, day_key)
 
             forecast = self.weather_api.get_forecast_day(place, resolved_day)
+            # print(f"DEBUG: Calling API with: {place} for date: {resolved_day}")
             if forecast.get("error"):
                 return "I couldn't find that forecast."
 
@@ -269,7 +312,7 @@ class LLM:
                 yesno = "Yes" if condition_matches(requested_condition, weather) else "No"
                 return (
                     f"{yesno}. The weather in {place} on {resolved_day} will be {weather}, "
-                    f"with a temperature between {tmin}°C and {tmax}°C."
+                    # f"with a temperature between {tmin}°C and {tmax}°C."
                 )
 
             if is_temperature_query(user_text):
@@ -297,43 +340,67 @@ class LLM:
                         dt = datetime.fromisoformat(end_time)
                     if dt >= now:
                         upcoming.append(e)
-                    else:
-                        self.calendar_api.delete_event(e["id"])
+                        # Removed the delete_event call to prevent data loss
                 except Exception:
                     upcoming.append(e)
             events = upcoming
-
+            events.sort(key=lambda x: x['start_time'])
             # --------------------
             # ADD event
             # --------------------
             if is_add_event(user_text):
                 title = self._extract_title_from_text(user_text)
                 date_obj = self._parse_date_from_text(user_text)
+
+                # If no specific date found, check for "tomorrow" or "today" keywords
+                if not date_obj:
+                    day_keyword = extract_day(user_text)
+                    if day_keyword == "tomorrow":
+                        date_obj = datetime.now() + timedelta(days=1)
+                    elif day_keyword == "today":
+                        date_obj = datetime.now()
                 start_time = date_obj.isoformat() if date_obj else datetime.now().isoformat()
                 end_time = (date_obj + timedelta(hours=1)).isoformat() if date_obj else (datetime.now() + timedelta(hours=1)).isoformat()
+
+                specific_location = extract_location(user_text)
 
                 event = self.calendar_api.create_event(
                     title=title,
                     description="Created via assistant",
                     start_time=start_time,
                     end_time=end_time,
-                    location=self.facts.get("location", "Marburg")
+                    location=specific_location  # Only uses location if explicitly found
                 )
                 self.last_calendar_event_id = event.get("id")
                 self.last_calendar_turn = len(self.history)//2
-                return f"Created appointment: {title}."
+                if date_obj:
+                    date_str = date_obj.strftime("%d of %B")
+                    return f"Created appointment: {title} for {date_str}."
+                else:
+                    return f"Created appointment: {title}."
 
             # --------------------
             # DELETE event
             # --------------------
+
             if is_delete_event(user_text):
-                # Check if user mentions a title
+                # 1. Handle "Delete All"
+                if "all" in user_text.lower():
+                    if not events:
+                        return "You have no appointments to delete."
+
+                    count = len(events)
+                    for e in events:
+                        self.calendar_api.delete_event(e["id"])
+                    return f"Deleted all {count} upcoming appointments."
+
+                # 2. Check if user mentions a title
                 title_match = re.search(r"titled\s+'?\"?([A-Za-z0-9\s]+)'?\"?", user_text, re.IGNORECASE)
                 if title_match:
                     title_to_delete = title_match.group(1).strip().lower()
                     deleted = False
                     for e in events:
-                        if e.get("title","").lower() == title_to_delete:
+                        if e.get("title", "").lower() == title_to_delete:
                             self.calendar_api.delete_event(e["id"])
                             deleted = True
                             break
@@ -341,6 +408,8 @@ class LLM:
                         return f"Deleted appointment titled '{title_to_delete}'."
                     else:
                         return f"No appointment found with title '{title_to_delete}'."
+
+                # 3. Delete the last created event (context)
                 elif self.last_calendar_event_id:
                     self.calendar_api.delete_event(self.last_calendar_event_id)
                     self.last_calendar_event_id = None
@@ -352,44 +421,120 @@ class LLM:
             # UPDATE event
             # --------------------
             if is_update_event(user_text):
+                # 1. Determine which event to update
+                event_id = None
                 if self.last_calendar_event_id:
-                    new_loc = extract_location(user_text) or "Marburg"
-                    self.calendar_api.update_event(self.last_calendar_event_id, location=new_loc)
-                    return f"Updated the previously created appointment location to {new_loc}."
+                    event_id = self.last_calendar_event_id
                 elif events:
-                    new_loc = extract_location(user_text) or "Marburg"
-                    self.calendar_api.update_event(events[0]["id"], location=new_loc)
-                    return f"Updated the event location to {new_loc}."
-                else:
+                    event_id = events[0]["id"]
+
+                if not event_id:
                     return "You have no events to update."
+
+                # 2. Check for DATE update FIRST
+                new_date_obj = self._parse_date_from_text(user_text)
+
+                # Check for keywords like "tomorrow" or "today"
+                if not new_date_obj:
+                    day_key = extract_day(user_text)
+                    if day_key == "today":
+                        new_date_obj = datetime.now()
+                    elif day_key == "tomorrow":
+                        new_date_obj = datetime.now() + timedelta(days=1)
+
+                if new_date_obj:
+                    # USE ISO FORMAT (matches your create_event logic)
+                    new_time_str = new_date_obj.replace(hour=9, minute=0).isoformat()
+
+                    # USE 'start_time' (matches your create_event logic)
+                    self.calendar_api.update_event(event_id, start_time=new_time_str)
+
+                    date_display = new_date_obj.strftime("%d %B")
+                    return f"Updated the appointment date to {date_display}."
+
+                # 3. Check for LOCATION update
+                new_loc = extract_location(user_text)
+                if new_loc:
+                    self.calendar_api.update_event(event_id, location=new_loc)
+                    return f"Updated the appointment location to {new_loc}."
+
+                return "I'm not sure what you want to change (date or location)."
 
             # --------------------
             # LIST events
             # --------------------
+            current_year = datetime.now().year
+
+            # Helper function to format date with year if needed
+            def format_event_date(iso_time):
+                dt = datetime.fromisoformat(iso_time)
+                if dt.year != current_year:
+                    return dt.strftime('%d %B %Y')  # Show Year (e.g., 13 January 2027)
+                return dt.strftime('%d %B')  # Hide Year (e.g., 31 January)
+
+            # 1. Handle "Next" appointment specifically
+            if "next" in user_text.lower():
+                if not events:
+                    return "You have no upcoming appointments."
+                # events[0] is the closest one (because we sorted them earlier)
+                e = events[0]
+                date_display = format_event_date(e['start_time'])
+                loc = e.get('location')
+
+                if loc:
+                    return f"Your next appointment is '{e['title']}' on {date_display} at {loc}."
+                else:
+                    return f"Your next appointment is '{e['title']}' on {date_display}."
+
+            # 2. Handle "Today"
             if "today" in user_text.lower():
                 today_str = datetime.now().strftime("%Y-%m-%d")
-                today_events = [e for e in events if e.get("start_time","").startswith(today_str)]
+                today_events = [e for e in events if e.get("start_time", "").startswith(today_str)]
                 if not today_events:
                     return "No calendar events for today."
-                return "\n".join([f"You have an event '{e['title']}' on {datetime.fromisoformat(e['start_time']).strftime('%d %B')} at {e.get('location','TBA')}." for e in today_events])
 
-            # Show all upcoming
+                lines = []
+                for e in today_events:
+                    date_display = format_event_date(e['start_time'])
+                    loc = e.get('location')
+                    if loc:
+                        lines.append(f"You have an event '{e['title']}' on {date_display} at {loc}.")
+                    else:
+                        lines.append(f"You have an event '{e['title']}' on {date_display}.")
+                return "\n".join(lines)
+
+            # 3. Show all upcoming (Default)
             if not events:
                 return "No calendar events found."
-            return "\n".join([f"You have an event '{e['title']}' on {datetime.fromisoformat(e['start_time']).strftime('%d %B')} at {e.get('location','TBA')}." for e in events])
 
+            lines = []
+            for e in events:
+                date_display = format_event_date(e['start_time'])
+                loc = e.get('location')
+                if loc:
+                    lines.append(f"You have an event '{e['title']}' on {date_display} at {loc}.")
+                else:
+                    lines.append(f"You have an event '{e['title']}' on {date_display}.")
+            return "\n".join(lines)
         # --------------------
         # FALLBACK
         # --------------------
         try:
-            response = ollama.chat(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_text},
-                ],
-            )
-            return response["message"]["content"].strip()
+            # Build context from history
+            messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+            # Add last few exchanges to context
+            messages.extend(self.history[-self.max_exchanges * 2:])
+            messages.append({"role": "user", "content": user_text})
+
+            response = ollama.chat(model=self.model, messages=messages)
+            bot_reply = response["message"]["content"].strip()
+
+            # Update history manually
+            self.history.append({"role": "user", "content": user_text})
+            self.history.append({"role": "assistant", "content": bot_reply})
+            self._trim_history()
+
+            return bot_reply
         except Exception:
             return "Sorry, I'm having trouble responding right now."
 
@@ -401,4 +546,6 @@ if __name__ == "__main__":
         user_input = input("You: ").strip()
         if user_input.lower() in {"exit", "quit"}:
             break
-        print("Assistant:", llm.generate(user_input))
+        response = llm.generate(user_input)
+        print("Assistant:", response)
+        llm._save_memory()  # <--- SAVE AFTER EVERY TURN
