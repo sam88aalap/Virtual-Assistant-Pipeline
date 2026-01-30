@@ -10,6 +10,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . /Virtual-Assistant.Pipeline
 
-ENTRYPOINT ["python", "/Virtual-Assistant.Pipeline/main.py"]
+ENTRYPOINT ["python", "/Virtual-Assistant.Pipeline/llm.py"]
 
-CMD ["python", "/Virtual-Assistant.Pipeline/main.py" ]
+#CMD ["python", "/Virtual-Assistant.Pipeline/llm.py" ]
