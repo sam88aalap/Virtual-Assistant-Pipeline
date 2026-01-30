@@ -1,8 +1,8 @@
 from llm import LLM
 from weatherAPI import WeatherAPI
 from CalendarAPI import CalendarAPI
-from ASR import listen_once
-from TTS import text_to_speech_stream
+from ASR import listen_once, listen_once_mic
+from TTS import text_to_speech_stream, text_to_speech_file
 
 llm = LLM()
 weather_api = WeatherAPI()
@@ -51,6 +51,8 @@ def run_voice_assistant():
 
     while True:
         user_text = listen_once()
+        #user_text = listen_once_mic()
+        print("You: ", user_text)
         if not user_text:
             continue
 
@@ -60,17 +62,21 @@ def run_voice_assistant():
         if user_text.lower() == "/reset":
             llm.reset_memory()
             reply = "Memory cleared."
+        else:
+            reply = llm.generate(user_text)
+        '''
         elif is_weather_query(user_text):
             reply = handle_weather(user_text)
         elif is_calendar_query(user_text):
             reply = handle_calendar(user_text)
-        else:
-            reply = llm.generate(user_text)
+        '''
 
+        
         print("Assistant:", reply)
 
         try:
-            text_to_speech_stream(reply)
+            #text_to_speech_stream(reply)
+            text_to_speech_file(reply)
         except Exception as e:
             print("TTS error:", e)
 

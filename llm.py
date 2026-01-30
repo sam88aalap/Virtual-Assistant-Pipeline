@@ -48,7 +48,7 @@ def extract_location(text: str) -> Optional[str]:
         r"\b(will|be|like|weather|forecast|on|the|appointment|my|place)\b",
         "", loc, flags=re.IGNORECASE
     )
-    return loc.strip() or Nonewhat
+    return loc.strip() or None
 
 def extract_day(text: str) -> Optional[str]:
     t = normalize(text)
